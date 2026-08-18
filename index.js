@@ -275,10 +275,48 @@ app.event("message", async ({ event, say, logger }) => {
   } catch (err) { logger.error(err); }
 });
 
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function joinChannelWithRetry(channel, maxAttempts = 3) {
+  let lastError = "unknown_error";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await app.client.conversations.join({ channel: channel.id });
+      if (result.warning === "already_in_channel") {
+        return { ok: true, status: "already_member" };
+      }
+      return { ok: true, status: "joined" };
+    } catch (err) {
+      lastError = err?.data?.error || err?.message || "unknown_error";
+      if (lastError === "ratelimited") {
+        const retryAfter = Number(err?.data?.retry_after || 5);
+        console.log(`⏳ Rate limited joining #${channel.name}; waiting ${retryAfter}s...`);
+        await sleep((retryAfter + 1) * 1000);
+        continue;
+      }
+      if (["internal_error", "fatal_error", "accesslimited"].includes(lastError) && attempt < maxAttempts) {
+        await sleep(attempt * 2000);
+        continue;
+      }
+      break;
+    }
+  }
+  return { ok: false, status: lastError };
+}
+
 async function joinAllPublicChannels() {
   let cursor;
+  let total = 0;
+  let already = 0;
   let joined = 0;
+  let failed = 0;
+  const failures = [];
+
   try {
+    console.log("🔎 Scanning workspace for EVERY public channel Janet can see...");
+
     do {
       const result = await app.client.conversations.list({
         types: "public_channel",
@@ -287,23 +325,52 @@ async function joinAllPublicChannels() {
         ...(cursor ? { cursor } : {})
       });
 
-      for (const channel of result.channels || []) {
-        if (channel.is_member) continue;
-        try {
-          await app.client.conversations.join({ channel: channel.id });
-          joined++;
-          console.log(`📌 Janet joined #${channel.name}`);
-        } catch (err) {
-          console.log(`⚠️ Could not join #${channel.name}: ${err.data?.error || err.message}`);
+      const channels = result.channels || [];
+      total += channels.length;
+      console.log(`📚 Slack returned ${channels.length} public channel(s) on this page.`);
+
+      for (const channel of channels) {
+        if (!channel?.id || !channel?.name) continue;
+
+        if (channel.is_member) {
+          already++;
+          continue;
         }
+
+        const result = await joinChannelWithRetry(channel);
+        if (result.ok && result.status === "joined") {
+          joined++;
+          console.log(`✅ Janet joined #${channel.name}`);
+        } else if (result.ok && result.status === "already_member") {
+          already++;
+        } else {
+          failed++;
+          failures.push(`${channel.name}=${result.status}`);
+          console.log(`⚠️ Janet could NOT join #${channel.name} — Slack says: ${result.status}`);
+        }
+
+        // Small pause between joins to be polite to Slack's API.
+        await sleep(250);
       }
+
       cursor = result.response_metadata?.next_cursor || undefined;
     } while (cursor);
 
-    console.log(`📚 Public-channel scan complete. Janet joined ${joined} new channel(s).`);
+    console.log(`📊 Janet channel scan: ${total} public channel(s) found | ${joined} joined | ${already} already joined | ${failed} failed.`);
+    if (failures.length) {
+      console.log(`⚠️ Channels needing attention: ${failures.join(", ")}`);
+    } else {
+      console.log("🎉 Janet successfully joined every public channel returned by Slack.");
+    }
   } catch (err) {
-    console.error(`❌ Public-channel scan failed: ${err.data?.error || err.message}`);
+    console.error(`❌ Public-channel scan failed: ${err?.data?.error || err?.message || err}`);
   }
+}
+
+// Re-scan periodically so newly-created public channels get picked up too.
+function startChannelScanner() {
+  joinAllPublicChannels();
+  setInterval(joinAllPublicChannels, 10 * 60 * 1000);
 }
 
 
@@ -450,5 +517,14 @@ http.createServer((req, res) => {
 await app.start();
 console.log("⚡ Deluxe Media HR Manager is running.");
 console.log("🤬 Rule-based mode: NO AI.");
-await joinAllPublicChannels();
+
+try {
+  const auth = await app.client.auth.test();
+  console.log(`🔐 Slack auth OK: ${auth.user || "Janet"} in workspace ${auth.team || "unknown"}`);
+  if (auth.user_id) console.log(`🤖 Janet bot user ID: ${auth.user_id}`);
+} catch (err) {
+  console.error(`❌ Slack auth.test failed: ${err?.data?.error || err?.message || err}`);
+}
+
+startChannelScanner();
 startRandomHRDms();
