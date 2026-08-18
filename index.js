@@ -275,6 +275,172 @@ app.event("message", async ({ event, say, logger }) => {
   } catch (err) { logger.error(err); }
 });
 
+async function joinAllPublicChannels() {
+  let cursor;
+  let joined = 0;
+  try {
+    do {
+      const result = await app.client.conversations.list({
+        types: "public_channel",
+        exclude_archived: true,
+        limit: 200,
+        ...(cursor ? { cursor } : {})
+      });
+
+      for (const channel of result.channels || []) {
+        if (channel.is_member) continue;
+        try {
+          await app.client.conversations.join({ channel: channel.id });
+          joined++;
+          console.log(`📌 Janet joined #${channel.name}`);
+        } catch (err) {
+          console.log(`⚠️ Could not join #${channel.name}: ${err.data?.error || err.message}`);
+        }
+      }
+      cursor = result.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+
+    console.log(`📚 Public-channel scan complete. Janet joined ${joined} new channel(s).`);
+  } catch (err) {
+    console.error(`❌ Public-channel scan failed: ${err.data?.error || err.message}`);
+  }
+}
+
+
+// ============================================================
+// RANDOM HR DMS
+// Janet occasionally sends unsolicited, ridiculous HR check-ins.
+// No AI: these are pre-written and randomly selected.
+// Default: 2-4 DMs per day, during 10:00 AM-5:30 PM America/New_York.
+// Set HR_RANDOM_DMS=false in Railway if you ever want to disable them.
+// ============================================================
+const randomHRDms = [
+  "JANET — RANDOM HR AUDIT: Please rate your current level of workplace nonsense from 1–10. No explanation is required, which is fortunate because HR has a meeting.",
+  "This is a routine Human Resources wellness inspection. Are you currently doing your job, pretending to do your job, or strategically avoiding your job? Please select one mentally.",
+  "HR CHECK-IN: If your laptop could file a complaint against you today, what would the complaint be? Please consider this carefully.",
+  "Janet from HR here. Please confirm that you have not created a preventable problem that someone else will have to discover tomorrow.",
+  "Official HR inquiry: What is the most questionable decision you have made at work today? This is for absolutely no legitimate reason.",
+  "Please remain calm. This is a random HR message. You are not in trouble. Yet. What are you working on?",
+  "Human Resources has detected suspicious levels of productivity. Please explain yourself immediately.",
+  "Random compliance audit: Have you read the message you just sent before sending it? HR requires honesty.",
+  "Janet has selected you for today's Completely Unnecessary Employee Check-In. Are we thriving, surviving, or simply opening Slack repeatedly?",
+  "HR wants to know: If your current workload were a person, would you trust them with your keys?",
+  "Please answer this important HR question: Are you ahead of schedule, on schedule, or currently relying on optimism as a project-management system?",
+  "This is your unscheduled performance review. Current category: 'We'll circle back.' Please improve your situation before HR invents paperwork.",
+  "Janet's random HR question of the day: What task are you avoiding because you are hoping it will disappear?",
+  "For internal HR research: How many times have you said 'I'll do it later' today? Please note that HR already knows the answer.",
+  "Workplace wellness check: Have you consumed water today, or are you once again operating entirely on caffeine and poor decisions?",
+  "HR NOTICE: You have been selected at random for a vibe inspection. Current vibe? Please provide a professional answer to an inherently unprofessional question.",
+  "Janet here. Quick question: What is one thing on your to-do list that absolutely should have been done by now?",
+  "Confidential HR inquiry: If your calendar were subpoenaed, would it make you look organized or deeply suspicious?",
+  "Employee engagement survey, Janet edition: Are you productive today or merely moving windows around your monitor?",
+  "Random HR audit: Please confirm that your current Slack status accurately represents reality. HR is watching. Metaphorically.",
+  "Janet has a question for the employee population: Why are we like this? No response is necessary, but an honest one would be appreciated.",
+  "Please consider this your official reminder that 'I forgot' is not a long-term business strategy.",
+  "HR has reviewed your imaginary file and found absolutely nothing because Janet has no imaginary file. Yet. How's your day?",
+  "Random managerial question: If you had to explain your current project to a five-year-old, would the explanation reveal that you actually understand it?",
+  "Janet from HR conducting a surprise audit: What is currently preventing you from being 100% productive? Be honest. 'Slack' is an acceptable answer.",
+  "You have been randomly selected for an HR vibe check. Please confirm that you are not currently creating tomorrow's emergency.",
+  "Important HR research: How many browser tabs are open right now? This will absolutely not be used against you.",
+  "Janet requests a status update on your general level of chaos. Please answer in one word. Preferably a professional one.",
+  "Routine HR outreach: Is there anything currently happening at work that makes you think, 'This could have been handled better'? Congratulations, you're employed.",
+  "HR would like to remind you that your computer is not a therapist. Please stop screaming at it and finish the task."
+];
+
+const RANDOM_DM_ENABLED = String(process.env.HR_RANDOM_DMS ?? "true").toLowerCase() !== "false";
+const RANDOM_DM_MIN = 2;
+const RANDOM_DM_MAX = 4;
+const RANDOM_DM_START_HOUR = 10;
+const RANDOM_DM_END_HOUR = 17;
+const randomDMSentToday = new Set();
+let randomDMPlanDate = null;
+let randomDMPlan = [];
+
+function nyParts() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false
+  }).formatToParts(new Date());
+  const out = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return { date: `${out.year}-${out.month}-${out.day}`, hour: Number(out.hour), minute: Number(out.minute) };
+}
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function buildRandomDMPlan() {
+  const { date } = nyParts();
+  if (randomDMPlanDate === date) return;
+  randomDMPlanDate = date;
+  randomDMSentToday.clear();
+  const count = randomInt(RANDOM_DM_MIN, RANDOM_DM_MAX);
+  const used = new Set();
+  randomDMPlan = [];
+  while (randomDMPlan.length < count) {
+    const hour = randomInt(RANDOM_DM_START_HOUR, RANDOM_DM_END_HOUR);
+    const minute = randomInt(0, 59);
+    const key = hour * 60 + minute;
+    if (used.has(key)) continue;
+    used.add(key);
+    randomDMPlan.push(key);
+  }
+  randomDMPlan.sort((a, b) => a - b);
+  console.log(`📝 Janet's random HR DM schedule for ${date}: ${randomDMPlan.map(m => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`).join(", ")}`);
+}
+
+async function getEligibleUsers() {
+  let cursor;
+  const users = [];
+  do {
+    const result = await app.client.users.list({ limit: 200, ...(cursor ? { cursor } : {}) });
+    for (const user of result.members || []) {
+      if (user.deleted || user.is_bot || user.id === process.env.JANET_BOT_USER_ID) continue;
+      // Don't DM Slack guests; this keeps Janet inside the internal workspace population.
+      if (user.is_restricted || user.is_ultra_restricted) continue;
+      users.push(user);
+    }
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  return users;
+}
+
+async function sendRandomHRDM() {
+  if (!RANDOM_DM_ENABLED) return;
+  try {
+    const users = await getEligibleUsers();
+    const available = users.filter(u => !randomDMSentToday.has(u.id));
+    if (!available.length) {
+      console.log("📭 No eligible employees left for today's random HR DM.");
+      return;
+    }
+    const user = pick(available);
+    const dm = await app.client.conversations.open({ users: user.id });
+    await app.client.chat.postMessage({ channel: dm.channel.id, text: pick(randomHRDms) });
+    randomDMSentToday.add(user.id);
+    console.log(`📨 Janet randomly HR-DM'd ${user.real_name || user.name || user.id}`);
+  } catch (err) {
+    console.error(`❌ Random HR DM failed: ${err.data?.error || err.message}`);
+  }
+}
+
+function startRandomHRDms() {
+  if (!RANDOM_DM_ENABLED) {
+    console.log("📵 Random HR DMs are disabled (HR_RANDOM_DMS=false).");
+    return;
+  }
+  const tick = async () => {
+    buildRandomDMPlan();
+    const { hour, minute } = nyParts();
+    const now = hour * 60 + minute;
+    const due = randomDMPlan.some(m => m === now);
+    if (due) await sendRandomHRDM();
+  };
+  tick();
+  setInterval(tick, 60 * 1000);
+}
+
 const port = Number(process.env.PORT || 3000);
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -284,3 +450,5 @@ http.createServer((req, res) => {
 await app.start();
 console.log("⚡ Deluxe Media HR Manager is running.");
 console.log("🤬 Rule-based mode: NO AI.");
+await joinAllPublicChannels();
+startRandomHRDms();
