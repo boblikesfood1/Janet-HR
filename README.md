@@ -1,4 +1,4 @@
-# Deluxe Media HR Manager 🤬
+# Slack HR Manager 🤬
 
 A 100% rule-based Slack HR bot for Deluxe Media.
 
