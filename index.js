@@ -269,7 +269,7 @@ app.event("app_mention", async ({ event, say, logger }) => {
 
 app.event("message", async ({ event, say, logger }) => {
   try {
-    if (alreadySeen(event.event_id) || event.bot_id || event.subtype || event.channel_type !== "im") return;
+   if (alreadySeen(event.event_id) || event.bot_id || event.subtype || !["im", "app_home"].includes(event.channel_type)) return;
     const text = cleanText(event.text);
     if (text) await say(getResponse(text));
   } catch (err) { logger.error(err); }
